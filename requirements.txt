@@ -6,4 +6,6 @@ faiss-cpu
 huggingface-hub
 sentence-transformers
 python-dotenv
+pypdf
 PyPDF2
+langchain_huggingface

@@ -3,7 +3,7 @@ import os
 import tempfile
 import pickle
 import hashlib
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import logging
 from pathlib import Path
 import sys
@@ -23,7 +23,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory  # Keep original import
 from langchain_groq.chat_models import ChatGroq
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 
 # Suppress deprecation warnings for cleaner output
@@ -61,6 +61,15 @@ def get_cached_models(_api_key: str):
     except Exception as e:
         st.error(f"Error initializing models: {e}")
         return None, None
+
+def load_single_pdf_safe(pdf_path: str) -> Tuple[List[Any], str]:
+    """Load a single PDF file without Streamlit context dependencies"""
+    try:
+        loader = PyPDFLoader(pdf_path)
+        docs = loader.load()
+        return docs, None
+    except Exception as e:
+        return [], str(e)
 
 class StreamlitPDFChatbot:
     def __init__(self, api_key: str, cache_dir: str = "./streamlit_cache"):
@@ -107,38 +116,49 @@ class StreamlitPDFChatbot:
         
         return file_paths
     
-    def _load_single_pdf(self, pdf_path: str) -> List[Any]:
-        """Load a single PDF file"""
-        try:
-            loader = PyPDFLoader(pdf_path)
-            docs = loader.load()
-            return docs
-        except Exception as e:
-            st.error(f"Error loading {os.path.basename(pdf_path)}: {e}")
-            return []
-    
     def load_pdfs_parallel(self, pdf_files: List[str]) -> List[Any]:
         """Load multiple PDFs in parallel with progress bar"""
         documents = []
+        errors = []
         
         # Create progress bar
         progress_bar = st.progress(0)
         status_text = st.empty()
         
+        # Use ThreadPoolExecutor with proper error handling
         with ThreadPoolExecutor(max_workers=min(4, len(pdf_files))) as executor:
-            futures = [executor.submit(self._load_single_pdf, pdf) for pdf in pdf_files]
+            # Submit all tasks
+            future_to_file = {
+                executor.submit(load_single_pdf_safe, pdf): pdf 
+                for pdf in pdf_files
+            }
             
-            for i, future in enumerate(futures):
-                result = future.result()
-                documents.extend(result)
+            completed = 0
+            # Process completed futures
+            for future in as_completed(future_to_file):
+                pdf_file = future_to_file[future]
+                try:
+                    docs, error = future.result()
+                    if error:
+                        errors.append(f"Error loading {os.path.basename(pdf_file)}: {error}")
+                    else:
+                        documents.extend(docs)
+                except Exception as e:
+                    errors.append(f"Error loading {os.path.basename(pdf_file)}: {str(e)}")
                 
+                completed += 1
                 # Update progress
-                progress = (i + 1) / len(pdf_files)
+                progress = completed / len(pdf_files)
                 progress_bar.progress(progress)
-                status_text.text(f"Loaded {i + 1}/{len(pdf_files)} files...")
+                status_text.text(f"Loaded {completed}/{len(pdf_files)} files...")
         
         progress_bar.empty()
         status_text.empty()
+        
+        # Display any errors that occurred
+        if errors:
+            for error in errors:
+                st.error(error)
         
         return documents
     
@@ -291,12 +311,11 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configuration")
         
-        # API Key input (uncomment to use interactive input)
+        # API Key input
         api_key = st.text_input(
             "🔑 Enter your Groq API Key",
             type="password",
             help="Get your API key from https://console.groq.com/"
-            # value="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"  # Remove this default value in production
         )
     
         if not api_key:
