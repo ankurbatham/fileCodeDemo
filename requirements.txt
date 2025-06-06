@@ -9,3 +9,8 @@ python-dotenv
 pypdf
 PyPDF2
 langchain_huggingface
+plotly 
+pandas 
+matplotlib 
+seaborn 
+numpy
