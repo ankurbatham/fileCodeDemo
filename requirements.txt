@@ -14,3 +14,4 @@ pandas
 matplotlib 
 seaborn 
 numpy
+reportlab
